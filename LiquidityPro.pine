@@ -27,10 +27,10 @@ cSwept    = input.color(color.new(#787b86, 0), "Swept", group = grpS)
 lineW     = input.int(1, "Line Width", minval = 1, maxval = 4, group = grpS)
 
 grpH = "Heatmap"
-showBands = input.bool(true, "Liquidity Heat Bands (time-based)", group = grpH, tooltip = "Hər pool üçün zamanla uzanan istilik zolağı — rəng həcmin intensivliyinə görə")
+showBands = input.bool(false, "Liquidity Heat Bands (time-based)", group = grpH, tooltip = "Hər pool üçün zamanla uzanan istilik zolağı — rəng həcmin intensivliyinə görə")
 bandAtr   = input.float(0.25, "Band Thickness (ATR)", minval = 0.02, step = 0.05, group = grpH)
 showSweptBand = input.bool(true, "Show Swept Bands (faded)", group = grpH)
-showHeat  = input.bool(true, "Volume Profile Heatmap (right)", group = grpH)
+showHeat  = input.bool(false, "Volume Profile Heatmap (right)", group = grpH)
 heatSrc   = input.string("Pools + Volume", "Profile Source", options = ["Pools", "Volume", "Pools + Volume"], group = grpH)
 bins      = input.int(60, "Number of Bins", minval = 10, maxval = 150, group = grpH)
 heatW     = input.int(50, "Profile Max Width (bars)", minval = 5, group = grpH)
@@ -41,6 +41,22 @@ vaPct     = input.float(70, "Value Area %", minval = 10, maxval = 95, group = gr
 palette   = input.string("Thermal", "Palette", options = ["Thermal", "Mono"], group = grpH)
 cHeat     = input.color(#ff9800, "Mono Color", group = grpH)
 cPoc      = input.color(#ffeb3b, "POC Color", group = grpH)
+
+grpG = "Heatmap Grid (Bookmap style)"
+showGrid  = input.bool(true, "Show Liquidity Heatmap Grid", group = grpG, tooltip = "Bütün qrafik boyu qiymət × zaman istilik xəritəsi: qara → yaşıl → sarı → qırmızı")
+gridStep  = input.float(0, "Row Height (points, 0 = auto)", minval = 0, group = grpG)
+volTau    = input.int(150, "Volume Memory (bars)", minval = 5, group = grpG, tooltip = "Keçmiş həcmin nə qədər yavaş söndüyü")
+poolWgt   = input.float(1.0, "Pool Weight", minval = 0, step = 0.1, group = grpG)
+volWgt    = input.float(1.0, "Traded Volume Weight", minval = 0, step = 0.1, group = grpG)
+gamma     = input.float(0.7, "Contrast (gamma)", minval = 0.2, maxval = 3, step = 0.1, group = grpG)
+gridAlpha = input.int(25, "Heatmap Transparency", minval = 0, maxval = 95, group = grpG)
+showMag   = input.bool(true, "Magnet Line (strongest level)", group = grpG)
+magSpeed  = input.float(0.15, "Magnet Speed", minval = 0.01, maxval = 1, step = 0.01, group = grpG)
+cMag      = input.color(#ffd600, "Magnet Color", group = grpG)
+showVB    = input.bool(true, "Volume Bubbles on Candles", group = grpG)
+vbThr     = input.float(1.3, "Bubble Min Volume (x avg)", minval = 0.5, step = 0.1, group = grpG)
+cVBuy     = input.color(#2ee6b6, "Buy Bubble", group = grpG)
+cVSell    = input.color(#ff4d8d, "Sell Bubble", group = grpG)
 
 grpT = "Dashboard"
 showTbl   = input.bool(true, "Show Nearest Liquidity Table", group = grpT)
@@ -316,6 +332,126 @@ if barstate.islast and (showHeat or showBands)
                     hLbl.push(label.new(x0 + heatW, pocPx, "POC " + str.tostring(pocPx, format.mintick), style = label.style_label_left, color = color.new(cPoc, 20), textcolor = color.black, size = size.small))
                     hLbl.push(label.new(x0 + heatW, vah, "VAH " + str.tostring(vah, format.mintick), style = label.style_none, textcolor = cPoc, size = size.small, textalign = text.align_left))
                     hLbl.push(label.new(x0 + heatW, val, "VAL " + str.tostring(val, format.mintick), style = label.style_none, textcolor = cPoc, size = size.small, textalign = text.align_left))
+
+// ═════════════════════════════ HEATMAP GRID ═════════════════════════════
+heatGrid(float t) =>
+    float x = math.pow(math.max(0.0, math.min(1.0, t)), gamma)
+    color c = x < 0.25 ? color.from_gradient(x, 0, 0.25, #000000, #0b3d1e) : x < 0.5 ? color.from_gradient(x, 0.25, 0.5, #0b3d1e, #4caf50) : x < 0.75 ? color.from_gradient(x, 0.5, 0.75, #4caf50, #ffeb3b) : color.from_gradient(x, 0.75, 1.0, #ffeb3b, #ff1744)
+    color.new(c, x < 0.05 ? 100 : gridAlpha)
+
+var float gStep = na
+rngAvg = ta.sma(high - low, 200)
+if na(gStep)
+    gStep := gridStep > 0 ? gridStep : bar_index >= 200 ? math.max(syminfo.mintick, math.round_to_mintick(rngAvg * 1.5)) : na
+
+// Ticarət olunmuş həcm xəritəsi — tənbəl eksponensial sönmə (key = qiymət sətri)
+var map<int, float> vMap = map.new<int, float>()
+var map<int, int>   vBar = map.new<int, int>()
+readVol(int k) =>
+    float v = nz(vMap.get(k))
+    v > 0 ? v * math.exp(-(bar_index - nz(vBar.get(k), bar_index)) / volTau) : 0.0
+if not na(gStep) and volume > 0
+    int k0 = int(math.floor(low / gStep))
+    int k1 = int(math.floor(high / gStep))
+    float part = volume / (k1 - k0 + 1)
+    for k = k0 to k1
+        vMap.put(k, readVol(k) + part)
+        vBar.put(k, bar_index)
+
+ROWS = 24
+array<float> rowPx  = array.new<float>(ROWS + 1, na)
+array<color> rowCol = array.new<color>(ROWS, na)
+float magTarget = na
+if showGrid and not na(gStep)
+    int base = int(math.floor(close / gStep)) - ROWS / 2
+    array<float> d = array.new<float>(ROWS, 0.0)
+    float avgPool = math.max(1.0, avgVol)
+    for i = 0 to ROWS - 1
+        float rc = (base + i + 0.5) * gStep
+        float w = volWgt * readVol(base + i) / math.max(1.0, avgVol / win)
+        for side = 0 to 1
+            array<Pool> arr = side == 0 ? highs : lows
+            for p in arr
+                if not p.swept
+                    float z = (p.price - rc) / (gStep * 0.7)
+                    if math.abs(z) < 3
+                        w += poolWgt * (p.vol / avgPool) * 10 * math.exp(-0.5 * z * z)
+        d.set(i, w)
+    float mx = d.max()
+    for i = 0 to ROWS
+        rowPx.set(i, (base + i) * gStep)
+    if mx > 0
+        for i = 0 to ROWS - 1
+            rowCol.set(i, heatGrid(d.get(i) / mx))
+        magTarget := (base + d.indexof(mx) + 0.5) * gStep
+
+var float mag = na
+if not na(magTarget)
+    mag := na(mag) or math.abs(magTarget - mag) > gStep * ROWS ? magTarget : mag + (magTarget - mag) * magSpeed
+
+gp0 = plot(rowPx.get(0), "", display = display.none, editable = false)
+gp1 = plot(rowPx.get(1), "", display = display.none, editable = false)
+gp2 = plot(rowPx.get(2), "", display = display.none, editable = false)
+gp3 = plot(rowPx.get(3), "", display = display.none, editable = false)
+gp4 = plot(rowPx.get(4), "", display = display.none, editable = false)
+gp5 = plot(rowPx.get(5), "", display = display.none, editable = false)
+gp6 = plot(rowPx.get(6), "", display = display.none, editable = false)
+gp7 = plot(rowPx.get(7), "", display = display.none, editable = false)
+gp8 = plot(rowPx.get(8), "", display = display.none, editable = false)
+gp9 = plot(rowPx.get(9), "", display = display.none, editable = false)
+gp10 = plot(rowPx.get(10), "", display = display.none, editable = false)
+gp11 = plot(rowPx.get(11), "", display = display.none, editable = false)
+gp12 = plot(rowPx.get(12), "", display = display.none, editable = false)
+gp13 = plot(rowPx.get(13), "", display = display.none, editable = false)
+gp14 = plot(rowPx.get(14), "", display = display.none, editable = false)
+gp15 = plot(rowPx.get(15), "", display = display.none, editable = false)
+gp16 = plot(rowPx.get(16), "", display = display.none, editable = false)
+gp17 = plot(rowPx.get(17), "", display = display.none, editable = false)
+gp18 = plot(rowPx.get(18), "", display = display.none, editable = false)
+gp19 = plot(rowPx.get(19), "", display = display.none, editable = false)
+gp20 = plot(rowPx.get(20), "", display = display.none, editable = false)
+gp21 = plot(rowPx.get(21), "", display = display.none, editable = false)
+gp22 = plot(rowPx.get(22), "", display = display.none, editable = false)
+gp23 = plot(rowPx.get(23), "", display = display.none, editable = false)
+gp24 = plot(rowPx.get(24), "", display = display.none, editable = false)
+fill(gp0, gp1, color = rowCol.get(0), editable = false)
+fill(gp1, gp2, color = rowCol.get(1), editable = false)
+fill(gp2, gp3, color = rowCol.get(2), editable = false)
+fill(gp3, gp4, color = rowCol.get(3), editable = false)
+fill(gp4, gp5, color = rowCol.get(4), editable = false)
+fill(gp5, gp6, color = rowCol.get(5), editable = false)
+fill(gp6, gp7, color = rowCol.get(6), editable = false)
+fill(gp7, gp8, color = rowCol.get(7), editable = false)
+fill(gp8, gp9, color = rowCol.get(8), editable = false)
+fill(gp9, gp10, color = rowCol.get(9), editable = false)
+fill(gp10, gp11, color = rowCol.get(10), editable = false)
+fill(gp11, gp12, color = rowCol.get(11), editable = false)
+fill(gp12, gp13, color = rowCol.get(12), editable = false)
+fill(gp13, gp14, color = rowCol.get(13), editable = false)
+fill(gp14, gp15, color = rowCol.get(14), editable = false)
+fill(gp15, gp16, color = rowCol.get(15), editable = false)
+fill(gp16, gp17, color = rowCol.get(16), editable = false)
+fill(gp17, gp18, color = rowCol.get(17), editable = false)
+fill(gp18, gp19, color = rowCol.get(18), editable = false)
+fill(gp19, gp20, color = rowCol.get(19), editable = false)
+fill(gp20, gp21, color = rowCol.get(20), editable = false)
+fill(gp21, gp22, color = rowCol.get(21), editable = false)
+fill(gp22, gp23, color = rowCol.get(22), editable = false)
+fill(gp23, gp24, color = rowCol.get(23), editable = false)
+plot(showMag ? mag : na, "Magnet", color = cMag, linewidth = 2)
+
+// Həcm köpükləri (alış yaşıl / satış çəhrayı, ölçü = həcm/orta)
+vr = nz(volume) / math.max(1e-10, ta.sma(nz(volume), volLen))
+isUp = close >= open
+t1 = showVB and vr >= vbThr and vr < vbThr * 1.8
+t2 = showVB and vr >= vbThr * 1.8 and vr < vbThr * 3
+t3 = showVB and vr >= vbThr * 3
+plotshape(t1 and isUp ? close : na, "VB S buy", shape.circle, location.absolute, color.new(cVBuy, 35), size = size.tiny, editable = false)
+plotshape(t1 and not isUp ? close : na, "VB S sell", shape.circle, location.absolute, color.new(cVSell, 35), size = size.tiny, editable = false)
+plotshape(t2 and isUp ? close : na, "VB M buy", shape.circle, location.absolute, color.new(cVBuy, 35), size = size.small, editable = false)
+plotshape(t2 and not isUp ? close : na, "VB M sell", shape.circle, location.absolute, color.new(cVSell, 35), size = size.small, editable = false)
+plotshape(t3 and isUp ? close : na, "VB L buy", shape.circle, location.absolute, color.new(cVBuy, 35), size = size.normal, editable = false)
+plotshape(t3 and not isUp ? close : na, "VB L sell", shape.circle, location.absolute, color.new(cVSell, 35), size = size.normal, editable = false)
 
 // ═════════════════════════════ DASHBOARD ═════════════════════════════
 pos = tblPos == "Top Right" ? position.top_right : tblPos == "Bottom Right" ? position.bottom_right : tblPos == "Top Left" ? position.top_left : position.bottom_left
