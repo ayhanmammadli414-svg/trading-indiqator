@@ -1,130 +1,124 @@
 //@version=6
-indicator("Liquidity Pro [Pools • Sweeps • Heatmap]", "LiqPro", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 500, max_bars_back = 5000)
+indicator("Liquidity Pro [BSL • SSL • Reversals]", "LiqPro", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 500, max_bars_back = 5000)
 
 // ═════════════════════════════ INPUTS ═════════════════════════════
-grpL = "Liquidity"
+grpL = "Liquidity Pools"
 swingLen  = input.int(20, "Swing Length", minval = 2, group = grpL, tooltip = "Pivot üçün sol/sağ bar sayı")
 volLen    = input.int(20, "Volume Average Length", minval = 1, group = grpL)
-minRatio  = input.float(1.0, "Min Volume Ratio", minval = 0.0, step = 0.1, group = grpL, tooltip = "Pivot pəncərəsinin həcmi / orta həcm. 1.0 = orta, 1.5 = güclü pool-lar")
+minRatio  = input.float(1.0, "Min Volume Ratio", minval = 0.0, step = 0.1, group = grpL, tooltip = "Pivot pəncərəsinin həcmi / orta həcm. Aşağıda olan pivotlar nəzərə alınmır")
 lookbackH = input.float(48, "Lookback Period (Hours)", minval = 1, group = grpL)
 useWin    = input.bool(true, "Use Price Window Filter", group = grpL)
 winPts    = input.float(500, "Liquidity Window (Points per Side)", minval = 0, group = grpL)
-maxPools  = input.int(40, "Max Active Pools per Side", minval = 1, maxval = 120, group = grpL)
-eqTolAtr  = input.float(0.10, "Equal High/Low Tolerance (ATR)", minval = 0, step = 0.05, group = grpL, tooltip = "Yaxın pivotlar EQH/EQL kimi birləşir, həcmi toplanır")
-sweepMode = input.string("Wick", "Sweep Mode", options = ["Wick", "Close"], group = grpL, tooltip = "Wick: fitil keçən kimi süpürülür. Close: bağlanış lazımdır")
-keepSwept = input.bool(true, "Keep Swept Levels", group = grpL)
-sweptKeep = input.int(60, "Swept Level Lifetime (bars)", minval = 1, group = grpL)
+maxPools  = input.int(30, "Max Active Pools per Side", minval = 1, maxval = 100, group = grpL)
+eqTolAtr  = input.float(0.10, "Equal High/Low Tolerance (ATR)", minval = 0, step = 0.05, group = grpL, tooltip = "Yaxın pivotlar EQH/EQL kimi birləşir — ən güclü likvidlik")
+minStars  = input.int(2, "Min Strength to Show (1-5)", minval = 1, maxval = 5, group = grpL, tooltip = "Zəif pool-ları gizlədir. 1 = hamısı, 3+ = yalnız güclülər")
+
+grpK = "Key Levels"
+useDay  = input.bool(true, "Previous Day High / Low (PDH/PDL)", group = grpK)
+useWeek = input.bool(true, "Previous Week High / Low (PWH/PWL)", group = grpK)
+useAsia = input.bool(true, "Asia Session High / Low", group = grpK)
+asiaSes = input.session("2000-0000", "Asia Session (New York time)", group = grpK)
+
+grpR = "Reversal Engine"
+showZone  = input.bool(true, "Show Reversal Zones", group = grpR, tooltip = "Hər güclü pool-un arxasındakı stop-hunt zonası — qiymət bura girib geri dönərsə reversal ehtimalı yüksəkdir")
+zoneAtr   = input.float(0.5, "Zone Depth (ATR)", minval = 0.1, step = 0.1, group = grpR)
+mssLen    = input.int(3, "Structure Shift Pivot Length", minval = 1, maxval = 10, group = grpR, tooltip = "Sweep-dən sonra təsdiq üçün kiçik struktur (MSS) pivotu")
+confBars  = input.int(20, "Max Bars to Confirm", minval = 1, group = grpR)
+minScore  = input.int(3, "Min Signal Score (1-5)", minval = 1, maxval = 5, group = grpR)
+showTrade = input.bool(true, "Draw Entry / SL / TP", group = grpR)
+tradeBars = input.int(30, "Trade Lines Length (bars)", minval = 5, group = grpR)
 
 grpS = "Style"
-showBub   = input.bool(true, "Volume Bubbles", group = grpS)
-showVolT  = input.bool(true, "Volume Text (K/M)", group = grpS)
 showLines = input.bool(true, "Liquidity Lines", group = grpS)
-showTag   = input.bool(true, "BSL/SSL/EQH/EQL Tags", group = grpS)
-showRaid  = input.bool(true, "Sweep Markers", group = grpS)
-cBsl      = input.color(color.new(#f23645, 0), "Buy-side (Highs)", group = grpS)
-cSsl      = input.color(color.new(#2962ff, 0), "Sell-side (Lows)", group = grpS)
-cSwept    = input.color(color.new(#787b86, 0), "Swept", group = grpS)
-lineW     = input.int(1, "Line Width", minval = 1, maxval = 4, group = grpS)
-
-grpH = "Heatmap"
-showBands = input.bool(false, "Liquidity Heat Bands (time-based)", group = grpH, tooltip = "Hər pool üçün zamanla uzanan istilik zolağı — rəng həcmin intensivliyinə görə")
-bandAtr   = input.float(0.25, "Band Thickness (ATR)", minval = 0.02, step = 0.05, group = grpH)
-showSweptBand = input.bool(true, "Show Swept Bands (faded)", group = grpH)
-showHeat  = input.bool(false, "Volume Profile Heatmap (right)", group = grpH)
-heatSrc   = input.string("Pools + Volume", "Profile Source", options = ["Pools", "Volume", "Pools + Volume"], group = grpH)
-bins      = input.int(60, "Number of Bins", minval = 10, maxval = 150, group = grpH)
-heatW     = input.int(50, "Profile Max Width (bars)", minval = 5, group = grpH)
-heatOff   = input.int(10, "Profile Offset (bars)", minval = 0, group = grpH)
-splitSide = input.bool(true, "Split Buy / Sell Volume", group = grpH)
-showPoc   = input.bool(true, "Show POC + Value Area (70%)", group = grpH)
-vaPct     = input.float(70, "Value Area %", minval = 10, maxval = 95, group = grpH)
-palette   = input.string("Thermal", "Palette", options = ["Thermal", "Mono"], group = grpH)
-cHeat     = input.color(#ff9800, "Mono Color", group = grpH)
-cPoc      = input.color(#ffeb3b, "POC Color", group = grpH)
-
-grpG = "Heatmap Grid (Bookmap style)"
-showGrid  = input.bool(true, "Show Liquidity Heatmap Grid", group = grpG, tooltip = "Bütün qrafik boyu qiymət × zaman istilik xəritəsi: qara → yaşıl → sarı → qırmızı")
-gridStep  = input.float(0, "Row Height (points, 0 = auto)", minval = 0, group = grpG)
-volTau    = input.int(150, "Volume Memory (bars)", minval = 5, group = grpG, tooltip = "Keçmiş həcmin nə qədər yavaş söndüyü")
-poolWgt   = input.float(1.0, "Pool Weight", minval = 0, step = 0.1, group = grpG)
-volWgt    = input.float(1.0, "Traded Volume Weight", minval = 0, step = 0.1, group = grpG)
-gamma     = input.float(1.3, "Contrast (gamma)", minval = 0.2, maxval = 3, step = 0.1, group = grpG)
-gridAlpha = input.int(45, "Heatmap Transparency", minval = 0, maxval = 95, group = grpG)
-showMag   = input.bool(true, "Magnet Line (strongest level)", group = grpG)
-minShow   = input.float(0.35, "Hide Weak Zones Below", minval = 0, maxval = 0.9, step = 0.05, group = grpG, tooltip = "Zəif zonaları gizlədir — yalnız həqiqətən güclü likvidlik rənglənir")
-magSpeed  = input.float(0.15, "Magnet Speed", minval = 0.01, maxval = 1, step = 0.01, group = grpG)
-cMag      = input.color(#ffd600, "Magnet Color", group = grpG)
-showVB    = input.bool(true, "Volume Bubbles on Candles", group = grpG)
-vbThr     = input.float(2.0, "Bubble Min Volume (x avg)", minval = 0.5, step = 0.1, group = grpG)
-cVBuy     = input.color(#2ee6b6, "Buy Bubble", group = grpG)
-cVSell    = input.color(#ff4d8d, "Sell Bubble", group = grpG)
+showBub   = input.bool(true, "Volume Bubbles at Pivot", group = grpS)
+showTag   = input.bool(true, "Labels (type • price • volume • ★)", group = grpS)
+keepSwept = input.bool(true, "Keep Swept Levels", group = grpS)
+sweptKeep = input.int(40, "Swept Level Lifetime (bars)", minval = 1, group = grpS)
+cBsl      = input.color(#f23645, "Buy-side (above)", group = grpS)
+cSsl      = input.color(#2962ff, "Sell-side (below)", group = grpS)
+cSwept    = input.color(#787b86, "Swept", group = grpS)
+cBull     = input.color(#00c853, "Bullish Reversal", group = grpS)
+cBear     = input.color(#ff1744, "Bearish Reversal", group = grpS)
 
 grpT = "Dashboard"
-showTbl   = input.bool(true, "Show Nearest Liquidity Table", group = grpT)
-tblPos    = input.string("Top Right", "Position", options = ["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group = grpT)
+showTbl = input.bool(true, "Show Dashboard", group = grpT)
+tblPos  = input.string("Top Right", "Position", options = ["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group = grpT)
 
 // ═════════════════════════════ TYPES / HELPERS ═════════════════════════════
 type Pool
-    float price
-    int   bar
-    int   t
-    float vol
-    float ratio
-    int   touches
-    bool  isHigh
-    bool  swept   = false
-    int   sweptAt = na
-    line  ln
-    label bub
-    label txt
+    float  price
+    int    bar
+    int    t
+    float  vol
+    float  ratio
+    int    touches
+    bool   isHigh
+    string kind     = ""
+    bool   swept    = false
+    int    sweptAt  = na
+    line   ln
+    label  bub
+    label  txt
+    box    zone
 
 fmtVol(float v) =>
     v >= 1e9 ? str.tostring(v / 1e9, "#.##") + "B" : v >= 1e6 ? str.tostring(v / 1e6, "#.##") + "M" : v >= 1e3 ? str.tostring(v / 1e3, "#") + "K" : str.tostring(v, "#")
 
-bubSize(float r) =>
-    r < 1.0 ? size.small : r < 1.6 ? size.normal : r < 2.5 ? size.large : size.huge
+stars(Pool p) =>
+    int s = 1
+    s += p.ratio >= 1.5 ? 1 : 0
+    s += p.ratio >= 2.5 ? 1 : 0
+    s += p.touches >= 2 ? 1 : 0
+    s += p.touches >= 3 or p.kind != "" ? 1 : 0
+    math.min(5, p.kind != "" ? math.max(s, 4) : s)
 
-heatColor(float x, int transp) =>
-    // x: 0..1 intensivlik → soyuq (göy) → isti (qırmızı/sarı)
-    float t = math.max(0.0, math.min(1.0, x))
-    color c = palette == "Mono" ? cHeat : t < 0.33 ? color.from_gradient(t, 0, 0.33, #0d47a1, #00bcd4) : t < 0.66 ? color.from_gradient(t, 0.33, 0.66, #00bcd4, #ffeb3b) : color.from_gradient(t, 0.66, 1.0, #ffeb3b, #ff1744)
-    color.new(c, palette == "Mono" ? math.round(transp + (100 - transp) * (1 - t) * 0.8) : transp)
+starStr(int n) =>
+    str.repeat("★", n)
 
 tagOf(Pool p) =>
-    (p.isHigh ? (p.touches > 1 ? "EQH" : "BSL") : (p.touches > 1 ? "EQL" : "SSL")) + (p.touches > 1 ? " ×" + str.tostring(p.touches) : "")
+    p.kind != "" ? p.kind : p.isHigh ? (p.touches > 1 ? "EQH×" + str.tostring(p.touches) : "BSL") : (p.touches > 1 ? "EQL×" + str.tostring(p.touches) : "SSL")
 
 lineText(Pool p) =>
-    showTag ? tagOf(p) + "  " + str.tostring(p.price, format.mintick) + (showVolT ? "  " + fmtVol(p.vol) : "") : ""
+    showTag ? tagOf(p) + "  " + str.tostring(p.price, format.mintick) + (p.vol > 0 ? "  " + fmtVol(p.vol) : "") + "  " + starStr(stars(p)) : ""
+
+bubSize(float r) =>
+    r < 1.0 ? size.tiny : r < 1.6 ? size.small : r < 2.5 ? size.normal : size.large
 
 deletePool(Pool p) =>
     line.delete(p.ln)
     label.delete(p.bub)
     label.delete(p.txt)
+    box.delete(p.zone)
 
-// ═════════════════════════════ CORE CALC ═════════════════════════════
+// ═════════════════════════════ CORE ═════════════════════════════
 var array<Pool> highs = array.new<Pool>()
 var array<Pool> lows  = array.new<Pool>()
 
-atr     = ta.atr(14)
-win     = 2 * swingLen + 1
-winVol  = math.sum(nz(volume), win)                    // pivot ± swingLen pəncərəsinin həcmi
-avgVol  = ta.sma(nz(volume), volLen) * win
-ph      = ta.pivothigh(high, swingLen, swingLen)
-pl      = ta.pivotlow(low, swingLen, swingLen)
-lbMs    = lookbackH * 3600000.0
+atr    = ta.atr(14)
+win    = 2 * swingLen + 1
+winVol = math.sum(nz(volume), win)
+avgVol = ta.sma(nz(volume), volLen) * win
+ph     = ta.pivothigh(high, swingLen, swingLen)
+pl     = ta.pivotlow(low, swingLen, swingLen)
+lbMs   = lookbackH * 3600000.0
 
-createPool(float price, bool isHigh, float v, float r) =>
-    int  pb  = bar_index - swingLen
-    col      = isHigh ? cBsl : cSsl
-    Pool p   = Pool.new(price, pb, time[swingLen], v, r, 1, isHigh)
+newPool(float price, bool isHigh, int pb, int pt, float v, float r, string kind) =>
+    col = isHigh ? cBsl : cSsl
+    Pool p = Pool.new(price, pb, pt, v, r, 1, isHigh, kind)
     if showLines
-        p.ln := line.new(pb, price, bar_index, price, color = col, width = lineW)
-    if showBub
-        p.bub := label.new(pb, price, "", style = label.style_circle, color = color.new(col, 25), size = bubSize(r))
+        p.ln := line.new(pb, price, bar_index, price, color = col, width = kind != "" ? 2 : 1, style = kind != "" ? line.style_solid : line.style_solid)
+    if showBub and kind == ""
+        p.bub := label.new(pb, price, "", style = label.style_circle, color = color.new(col, 30), size = bubSize(r), tooltip = "Volume: " + fmtVol(v) + "\nRatio: " + str.tostring(r, "#.##") + "x")
     p.txt := label.new(bar_index, price, lineText(p), style = label.style_none, textcolor = col, size = size.small, textalign = text.align_left)
-    if showVolT and showBub
-        label.set_tooltip(p.bub, tagOf(p) + "\nPrice: " + str.tostring(price, format.mintick) + "\nVolume: " + fmtVol(v) + "\nRatio: " + str.tostring(r, "#.##") + "x")
+    if showZone
+        float z = zoneAtr * atr
+        p.zone := box.new(pb, isHigh ? price + z : price, bar_index, isHigh ? price : price - z, border_color = color.new(col, 100), bgcolor = color.new(col, 88))
     p
+
+push(array<Pool> arr, Pool p) =>
+    arr.push(p)
+    if arr.size() > maxPools
+        deletePool(arr.shift())
 
 addPivot(array<Pool> arr, float price, bool isHigh) =>
     float r   = avgVol > 0 ? winVol / avgVol : 1.0
@@ -133,367 +127,240 @@ addPivot(array<Pool> arr, float price, bool isHigh) =>
         bool merged = false
         if arr.size() > 0
             for p in arr
-                if not p.swept and math.abs(p.price - price) <= tol
+                if not p.swept and p.kind == "" and math.abs(p.price - price) <= tol
                     p.price   := isHigh ? math.max(p.price, price) : math.min(p.price, price)
                     p.vol     += winVol
                     p.ratio   := math.max(p.ratio, r)
                     p.touches += 1
-                    label.set_y(p.bub, p.price)
-                    label.set_size(p.bub, bubSize(p.ratio + 0.5 * (p.touches - 1)))
                     line.set_y1(p.ln, p.price)
                     line.set_y2(p.ln, p.price)
+                    label.set_y(p.bub, p.price)
                     merged := true
                     break
         if not merged
-            arr.push(createPool(price, isHigh, winVol, r))
-            if arr.size() > maxPools
-                deletePool(arr.shift())
+            push(arr, newPool(price, isHigh, bar_index - swingLen, time[swingLen], winVol, r, ""))
 
 if not na(ph)
     addPivot(highs, ph, true)
 if not na(pl)
     addPivot(lows, pl, false)
 
-// Update: sweep / extend / expire / window
-var int   sweptHiCount = 0
-var int   sweptLoCount = 0
-bool bslSwept = false
-bool sslSwept = false
-float lastSweepPx = na
+// ── Key levels ──
+[pdh, pdl] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead = barmerge.lookahead_on)
+[pwh, pwl] = request.security(syminfo.tickerid, "W", [high[1], low[1]], lookahead = barmerge.lookahead_on)
+newDay  = timeframe.change("D")
+newWeek = timeframe.change("W")
+if useDay and newDay and not timeframe.isdwm
+    push(highs, newPool(pdh, true, bar_index, time, 0, 0, "PDH"))
+    push(lows, newPool(pdl, false, bar_index, time, 0, 0, "PDL"))
+if useWeek and newWeek and not timeframe.isweekly and not timeframe.ismonthly
+    push(highs, newPool(pwh, true, bar_index, time, 0, 0, "PWH"))
+    push(lows, newPool(pwl, false, bar_index, time, 0, 0, "PWL"))
 
+inAsia = not na(time(timeframe.period, asiaSes, "America/New_York"))
+var float aHi = na
+var float aLo = na
+var int   aHb = na
+var int   aLb = na
+if useAsia and timeframe.isintraday
+    if inAsia and not inAsia[1]
+        aHi := high
+        aLo := low
+        aHb := bar_index
+        aLb := bar_index
+    else if inAsia
+        if high > aHi
+            aHi := high
+            aHb := bar_index
+        if low < aLo
+            aLo := low
+            aLb := bar_index
+    if not inAsia and inAsia[1] and not na(aHi)
+        push(highs, newPool(aHi, true, aHb, time[bar_index - aHb], 0, 0, "ASIA H"))
+        push(lows, newPool(aLo, false, aLb, time[bar_index - aLb], 0, 0, "ASIA L"))
+
+// ── Minor structure for MSS confirmation ──
+mph = ta.pivothigh(high, mssLen, mssLen)
+mpl = ta.pivotlow(low, mssLen, mssLen)
+var float minorHi = na
+var float minorLo = na
+if not na(mph)
+    minorHi := mph
+if not na(mpl)
+    minorLo := mpl
+
+// ── Sweep detection ──
+var int   pendDir   = 0       // -1 BSL raid → bearish gözlənilir, +1 SSL raid → bullish
+var int   pendBar   = na
+var float pendExt   = na
+var float pendLvl   = na
+var float pendMss   = na
+var int   pendStars = 0
+var string pendTag  = ""
+bool raidBsl = false
+bool raidSsl = false
+
+// Funksiya qlobal dəyişəni dəyişə bilmir → ən güclü raid-i qaytarır
 updatePools(array<Pool> arr) =>
-    bool hit = false
-    float px = na
+    int    rStars = 0
+    float  rExt   = na
+    float  rLvl   = na
+    string rTag   = ""
     if arr.size() > 0
         for i = arr.size() - 1 to 0
             Pool p = arr.get(i)
             bool remove = false
+            int  st = stars(p)
             if not p.swept
-                bool took = p.isHigh ? (sweepMode == "Wick" ? high > p.price : close > p.price) : (sweepMode == "Wick" ? low < p.price : close < p.price)
-                if took and bar_index > p.bar + swingLen
+                bool took = p.isHigh ? high > p.price : low < p.price
+                if took and bar_index > p.bar
                     p.swept   := true
                     p.sweptAt := bar_index
-                    hit := true
-                    px  := p.price
                     bool rejected = p.isHigh ? close < p.price : close > p.price
                     line.set_x2(p.ln, bar_index)
                     line.set_color(p.ln, cSwept)
                     line.set_style(p.ln, line.style_dashed)
-                    label.set_color(p.bub, color.new(cSwept, 50))
+                    label.set_color(p.bub, color.new(cSwept, 60))
                     label.set_textcolor(p.txt, cSwept)
                     label.set_x(p.txt, bar_index)
-                    label.set_text(p.txt, showTag ? (rejected ? "✕ RAID " : "✕ BREAK ") + tagOf(p) : "")
-                    if showRaid
-                        label.new(bar_index, p.price, rejected ? "⚡" : "", style = p.isHigh ? label.style_label_down : label.style_label_up, color = color.new(color.white, 100), textcolor = p.isHigh ? cBsl : cSsl, size = size.small)
+                    label.set_text(p.txt, showTag ? (rejected ? "RAID " : "BREAK ") + tagOf(p) : "")
+                    box.delete(p.zone)
+                    if rejected and st > rStars
+                        rStars := st
+                        rExt   := p.isHigh ? high : low
+                        rLvl   := p.price
+                        rTag   := tagOf(p)
                     if not keepSwept
                         remove := true
                 else
-                    line.set_x2(p.ln, bar_index + 3)
-                    label.set_x(p.txt, bar_index + 3)
-                    bool inWin = not useWin or math.abs(p.price - close) <= winPts
+                    bool vis = st >= minStars and (not useWin or math.abs(p.price - close) <= winPts)
                     color c = p.isHigh ? cBsl : cSsl
-                    line.set_color(p.ln, inWin ? c : color.new(c, 100))
-                    label.set_textcolor(p.txt, inWin ? c : color.new(c, 100))
-                    label.set_color(p.bub, inWin ? color.new(c, 25) : color.new(c, 100))
+                    line.set_x2(p.ln, bar_index + 5)
+                    line.set_color(p.ln, vis ? color.new(c, st >= 4 ? 0 : 35) : color.new(c, 100))
+                    line.set_width(p.ln, st >= 4 ? 2 : 1)
+                    label.set_x(p.txt, bar_index + 5)
                     label.set_text(p.txt, lineText(p))
+                    label.set_textcolor(p.txt, vis ? c : color.new(c, 100))
+                    label.set_color(p.bub, vis ? color.new(c, 30) : color.new(c, 100))
+                    box.set_right(p.zone, bar_index + 5)
+                    box.set_bgcolor(p.zone, vis and st >= 3 ? color.new(c, 85) : color.new(c, 100))
             else if bar_index - p.sweptAt > sweptKeep
                 remove := true
-            if time - p.t > lbMs
+            if time - p.t > lbMs and p.kind == "" or p.kind != "" and time - p.t > 8 * 86400000
                 remove := true
             if remove
                 deletePool(p)
                 arr.remove(i)
-    [hit, px]
+    [rStars, rExt, rLvl, rTag]
 
-[hHit, hPx] = updatePools(highs)
-[lHit, lPx] = updatePools(lows)
-bslSwept := hHit
-sslSwept := lHit
+[hS, hExt, hLvl, hTag] = updatePools(highs)
+[lS, lExt, lLvl, lTag] = updatePools(lows)
+raidBsl := hS > 0 and hS >= lS
+raidSsl := lS > 0 and lS > hS
+// yeni raid köhnə gözləməni əvəz edir (daha güclü və ya köhnəsi bitib)
+if (raidBsl or raidSsl) and (pendDir == 0 or math.max(hS, lS) >= pendStars or bar_index - pendBar > confBars)
+    pendDir   := raidBsl ? -1 : 1
+    pendBar   := bar_index
+    pendExt   := raidBsl ? hExt : lExt
+    pendLvl   := raidBsl ? hLvl : lLvl
+    pendMss   := raidBsl ? minorLo : minorHi
+    pendStars := math.max(hS, lS)
+    pendTag   := raidBsl ? hTag : lTag
+if raidBsl
+    label.new(bar_index, high, "⚠", style = label.style_label_down, color = color.new(color.white, 100), textcolor = cBear, size = size.small, tooltip = "BSL raid: " + pendTag + " — MSS təsdiqi gözlənilir")
+if raidSsl
+    label.new(bar_index, low, "⚠", style = label.style_label_up, color = color.new(color.white, 100), textcolor = cBull, size = size.small, tooltip = "SSL raid: " + pendTag + " — MSS təsdiqi gözlənilir")
 
-// ═════════════════════════════ HEATMAP ═════════════════════════════
-var array<box>  heat  = array.new<box>()
-var array<line> hLine = array.new<line>()
-var array<label> hLbl = array.new<label>()
-if barstate.islast and (showHeat or showBands)
-    for b in heat
-        box.delete(b)
-    for l in hLine
-        line.delete(l)
-    for l in hLbl
-        label.delete(l)
-    heat.clear()
-    hLine.clear()
-    hLbl.clear()
+// ═════════════════════════════ REVERSAL CONFIRMATION ═════════════════════════════
+nearest(array<Pool> arr, bool above) =>
+    Pool best = na
+    for p in arr
+        if not p.swept and (above ? p.price > close : p.price < close) and (na(best) or math.abs(p.price - close) < math.abs(best.price - close))
+            best := p
+    best
 
-    // ── 1) Zaman əsaslı likvidlik zolaqları (Coinglass tipli) ──
-    if showBands
-        float mxV = 0.0
-        for p in highs
-            mxV := math.max(mxV, p.vol)
-        for p in lows
-            mxV := math.max(mxV, p.vol)
-        float hh = bandAtr * atr / 2
-        if mxV > 0
-            for side = 0 to 1
-                array<Pool> arr = side == 0 ? highs : lows
-                for p in arr
-                    bool inWin = not useWin or math.abs(p.price - close) <= winPts
-                    if inWin and (not p.swept or showSweptBand)
-                        float x = math.sqrt(p.vol / mxV)            // sqrt: zəif pool-lar da görünsün
-                        int   tr = p.swept ? 85 : 35
-                        int   x2 = p.swept ? p.sweptAt : bar_index + heatOff - 1
-                        heat.push(box.new(p.bar, p.price + hh, x2, p.price - hh, border_color = color.new(color.black, 100), bgcolor = heatColor(x, tr)))
-                        // nüvə — dəqiq səviyyə
-                        heat.push(box.new(p.bar, p.price + hh * 0.25, x2, p.price - hh * 0.25, border_color = color.new(color.black, 100), bgcolor = heatColor(x, math.max(0, tr - 25))))
+bool bullSig = false
+bool bearSig = false
+var string lastSig = "—"
+volSpike = nz(volume) > 1.5 * ta.sma(nz(volume), volLen)
 
-    // ── 2) Sağ tərəfdə dəqiq həcm profili ──
-    if showHeat
-        float top = close + winPts
-        float bot = close - winPts
-        if not useWin
-            top := high
-            bot := low
-            for p in highs
-                top := math.max(top, p.price)
-            for p in lows
-                bot := math.min(bot, p.price)
-        float step = (top - bot) / bins
-        if step > 0
-            array<float> wB = array.new<float>(bins, 0.0)   // alış / BSL
-            array<float> wS = array.new<float>(bins, 0.0)   // satış / SSL
-            if heatSrc != "Volume"
-                for side = 0 to 1
-                    array<Pool> arr = side == 0 ? highs : lows
-                    for p in arr
-                        if not p.swept and p.price >= bot and p.price <= top
-                            int k = math.min(bins - 1, int((p.price - bot) / step))
-                            if side == 0
-                                wB.set(k, wB.get(k) + p.vol)
-                            else
-                                wS.set(k, wS.get(k) + p.vol)
-            if heatSrc != "Pools"
-                int n = math.min(4999, math.max(1, int(lookbackH * 3600 / timeframe.in_seconds())), bar_index)
-                for j = 0 to n - 1
-                    float h = high[j]
-                    float l = low[j]
-                    float v = nz(volume[j])
-                    if v > 0 and h >= bot and l <= top
-                        // həcm barın bütün diapazonuna mütənasib paylanır (yalnız hlc3 yox)
-                        float rng = math.max(h - l, syminfo.mintick)
-                        float upFrac = (close[j] - l) / rng          // alıcı payı (close-location)
-                        int k0 = math.max(0, int((math.max(l, bot) - bot) / step))
-                        int k1 = math.min(bins - 1, int((math.min(h, top) - bot) / step))
-                        for k = k0 to k1
-                            float bLo = bot + step * k
-                            float ov  = math.max(0.0, math.min(h, bLo + step) - math.max(l, bLo))
-                            float part = h == l ? v : v * ov / rng
-                            wB.set(k, wB.get(k) + part * upFrac)
-                            wS.set(k, wS.get(k) + part * (1 - upFrac))
-            array<float> tot = array.new<float>(bins, 0.0)
-            for k = 0 to bins - 1
-                tot.set(k, wB.get(k) + wS.get(k))
-            float mx = tot.max()
-            if mx > 0
-                int x0 = bar_index + heatOff
-                for k = 0 to bins - 1
-                    float v = tot.get(k)
-                    if v > 0
-                        float yT = bot + step * (k + 1)
-                        float yB = bot + step * k
-                        int len = math.max(1, int(heatW * v / mx))
-                        if splitSide
-                            int lb = int(len * wB.get(k) / v)
-                            if lb > 0
-                                heat.push(box.new(x0, yT, x0 + lb, yB, border_color = color.new(color.black, 100), bgcolor = color.from_gradient(v, 0, mx, color.new(cBsl, 80), color.new(cBsl, 15))))
-                            if len - lb > 0
-                                heat.push(box.new(x0 + lb, yT, x0 + len, yB, border_color = color.new(color.black, 100), bgcolor = color.from_gradient(v, 0, mx, color.new(cSsl, 80), color.new(cSsl, 15))))
-                        else
-                            heat.push(box.new(x0, yT, x0 + len, yB, border_color = color.new(color.black, 100), bgcolor = heatColor(math.sqrt(v / mx), 15)))
-                if showPoc
-                    int poc = tot.indexof(mx)
-                    float total = tot.sum()
-                    float acc = mx
-                    int up = poc
-                    int dn = poc
-                    while acc < total * vaPct / 100 and (up < bins - 1 or dn > 0)
-                        float vu = up < bins - 1 ? tot.get(up + 1) : -1.0
-                        float vd = dn > 0 ? tot.get(dn - 1) : -1.0
-                        if vu >= vd
-                            up += 1
-                            acc += vu
-                        else
-                            dn -= 1
-                            acc += vd
-                    float pocPx = bot + step * (poc + 0.5)
-                    float vah = bot + step * (up + 1)
-                    float val = bot + step * dn
-                    hLine.push(line.new(x0 - heatOff, pocPx, x0 + heatW, pocPx, color = cPoc, width = 2))
-                    hLine.push(line.new(x0, vah, x0 + heatW, vah, color = color.new(cPoc, 40), style = line.style_dotted))
-                    hLine.push(line.new(x0, val, x0 + heatW, val, color = color.new(cPoc, 40), style = line.style_dotted))
-                    hLbl.push(label.new(x0 + heatW, pocPx, "POC " + str.tostring(pocPx, format.mintick), style = label.style_label_left, color = color.new(cPoc, 20), textcolor = color.black, size = size.small))
-                    hLbl.push(label.new(x0 + heatW, vah, "VAH " + str.tostring(vah, format.mintick), style = label.style_none, textcolor = cPoc, size = size.small, textalign = text.align_left))
-                    hLbl.push(label.new(x0 + heatW, val, "VAL " + str.tostring(val, format.mintick), style = label.style_none, textcolor = cPoc, size = size.small, textalign = text.align_left))
-
-// ═════════════════════════════ HEATMAP GRID ═════════════════════════════
-heatGrid(float t) =>
-    float x = math.pow(math.max(0.0, math.min(1.0, t)), gamma)
-    float y = (x - minShow) / (1 - minShow)          // zəif hissə tam şəffaf
-    color c = y < 0.5 ? color.from_gradient(y, 0, 0.5, #1b5e20, #ffd600) : color.from_gradient(y, 0.5, 1.0, #ffd600, #ff1744)
-    x < minShow ? na : color.new(c, math.round(gridAlpha + (100 - gridAlpha) * (1 - y) * 0.6))
-
-var float gStep = na
-rngAvg = ta.sma(high - low, 200)
-if na(gStep)
-    gStep := gridStep > 0 ? gridStep : bar_index >= 200 ? math.max(syminfo.mintick, math.round_to_mintick(rngAvg * 2.0)) : na
-
-// Ticarət olunmuş həcm xəritəsi — tənbəl eksponensial sönmə (key = qiymət sətri)
-var map<int, float> vMap = map.new<int, float>()
-var map<int, int>   vBar = map.new<int, int>()
-readVol(int k) =>
-    float v = nz(vMap.get(k))
-    v > 0 ? v * math.exp(-(bar_index - nz(vBar.get(k), bar_index)) / volTau) : 0.0
-if not na(gStep) and volume > 0
-    int k0 = int(math.floor(low / gStep))
-    int k1 = int(math.floor(high / gStep))
-    float part = volume / (k1 - k0 + 1)
-    for k = k0 to k1
-        vMap.put(k, readVol(k) + part)
-        vBar.put(k, bar_index)
-
-ROWS = 18
-array<float> rowPx  = array.new<float>(ROWS + 1, na)
-array<color> rowCol = array.new<color>(ROWS, na)
-float magTarget = na
-var int   gBase = na
-var float mxRef = 0.0
-bool shifted = false
-if not na(gStep)
-    float lo = (nz(gBase) + 3) * gStep
-    float hi = (nz(gBase) + ROWS - 3) * gStep
-    if na(gBase) or close < lo or close > hi                 // şəbəkə yalnız qiymət kənara çıxanda sürüşür
-        gBase := int(math.floor(close / gStep)) - ROWS / 2
-        shifted := true
-if showGrid and not na(gStep)
-    int base = gBase
-    array<float> d = array.new<float>(ROWS, 0.0)
-    float avgPool = math.max(1.0, avgVol)
-    for i = 0 to ROWS - 1
-        float rc = (base + i + 0.5) * gStep
-        float w = volWgt * readVol(base + i) / math.max(1.0, avgVol / win)
-        for side = 0 to 1
-            array<Pool> arr = side == 0 ? highs : lows
-            for p in arr
-                if not p.swept
-                    float z = (p.price - rc) / (gStep * 0.7)
-                    if math.abs(z) < 3
-                        w += poolWgt * (p.vol / avgPool) * 10 * math.exp(-0.5 * z * z)
-        d.set(i, w)
-    float mx = d.max()
-    mxRef := math.max(mx, mxRef * 0.995)                   // sabit miqyas: sakit dövrlər sakit görünür
-    if not shifted
-        for i = 0 to ROWS
-            rowPx.set(i, (base + i) * gStep)
-    if mx > 0
-        for i = 0 to ROWS - 1
-            rowCol.set(i, heatGrid(d.get(i) / mxRef))
-        magTarget := (base + d.indexof(mx) + 0.5) * gStep
-
-var float mag = na
-if not na(magTarget)
-    mag := na(mag) or math.abs(magTarget - mag) > gStep * ROWS ? magTarget : mag + (magTarget - mag) * magSpeed
-
-gp0 = plot(rowPx.get(0), "", display = display.none, editable = false)
-gp1 = plot(rowPx.get(1), "", display = display.none, editable = false)
-gp2 = plot(rowPx.get(2), "", display = display.none, editable = false)
-gp3 = plot(rowPx.get(3), "", display = display.none, editable = false)
-gp4 = plot(rowPx.get(4), "", display = display.none, editable = false)
-gp5 = plot(rowPx.get(5), "", display = display.none, editable = false)
-gp6 = plot(rowPx.get(6), "", display = display.none, editable = false)
-gp7 = plot(rowPx.get(7), "", display = display.none, editable = false)
-gp8 = plot(rowPx.get(8), "", display = display.none, editable = false)
-gp9 = plot(rowPx.get(9), "", display = display.none, editable = false)
-gp10 = plot(rowPx.get(10), "", display = display.none, editable = false)
-gp11 = plot(rowPx.get(11), "", display = display.none, editable = false)
-gp12 = plot(rowPx.get(12), "", display = display.none, editable = false)
-gp13 = plot(rowPx.get(13), "", display = display.none, editable = false)
-gp14 = plot(rowPx.get(14), "", display = display.none, editable = false)
-gp15 = plot(rowPx.get(15), "", display = display.none, editable = false)
-gp16 = plot(rowPx.get(16), "", display = display.none, editable = false)
-gp17 = plot(rowPx.get(17), "", display = display.none, editable = false)
-gp18 = plot(rowPx.get(18), "", display = display.none, editable = false)
-fill(gp0, gp1, color = rowCol.get(0), editable = false)
-fill(gp1, gp2, color = rowCol.get(1), editable = false)
-fill(gp2, gp3, color = rowCol.get(2), editable = false)
-fill(gp3, gp4, color = rowCol.get(3), editable = false)
-fill(gp4, gp5, color = rowCol.get(4), editable = false)
-fill(gp5, gp6, color = rowCol.get(5), editable = false)
-fill(gp6, gp7, color = rowCol.get(6), editable = false)
-fill(gp7, gp8, color = rowCol.get(7), editable = false)
-fill(gp8, gp9, color = rowCol.get(8), editable = false)
-fill(gp9, gp10, color = rowCol.get(9), editable = false)
-fill(gp10, gp11, color = rowCol.get(10), editable = false)
-fill(gp11, gp12, color = rowCol.get(11), editable = false)
-fill(gp12, gp13, color = rowCol.get(12), editable = false)
-fill(gp13, gp14, color = rowCol.get(13), editable = false)
-fill(gp14, gp15, color = rowCol.get(14), editable = false)
-fill(gp15, gp16, color = rowCol.get(15), editable = false)
-fill(gp16, gp17, color = rowCol.get(16), editable = false)
-fill(gp17, gp18, color = rowCol.get(17), editable = false)
-plot(showMag ? mag : na, "Magnet", color = cMag, linewidth = 2)
-
-// Həcm köpükləri (alış yaşıl / satış çəhrayı, ölçü = həcm/orta)
-vr = nz(volume) / math.max(1e-10, ta.sma(nz(volume), volLen))
-isUp = close >= open
-t1 = showVB and vr >= vbThr and vr < vbThr * 1.8
-t2 = showVB and vr >= vbThr * 1.8 and vr < vbThr * 3
-t3 = showVB and vr >= vbThr * 3
-plotshape(t1 and isUp ? close : na, "VB S buy", shape.circle, location.absolute, color.new(cVBuy, 35), size = size.tiny, editable = false)
-plotshape(t1 and not isUp ? close : na, "VB S sell", shape.circle, location.absolute, color.new(cVSell, 35), size = size.tiny, editable = false)
-plotshape(t2 and isUp ? close : na, "VB M buy", shape.circle, location.absolute, color.new(cVBuy, 35), size = size.small, editable = false)
-plotshape(t2 and not isUp ? close : na, "VB M sell", shape.circle, location.absolute, color.new(cVSell, 35), size = size.small, editable = false)
-plotshape(t3 and isUp ? close : na, "VB L buy", shape.circle, location.absolute, color.new(cVBuy, 35), size = size.normal, editable = false)
-plotshape(t3 and not isUp ? close : na, "VB L sell", shape.circle, location.absolute, color.new(cVSell, 35), size = size.normal, editable = false)
+if pendDir != 0
+    if bar_index - pendBar > confBars
+        pendDir := 0
+    else
+        // sweep ekstremumu yenilənirsə, onu izlə (stop yeri)
+        if pendDir == -1 and high > pendExt
+            pendExt := high
+        if pendDir == 1 and low < pendExt
+            pendExt := low
+        bool invalid = pendDir == -1 ? close > pendExt : close < pendExt
+        bool mss = pendDir == -1 ? not na(pendMss) and close < pendMss : not na(pendMss) and close > pendMss
+        if invalid
+            pendDir := 0
+        else if mss
+            float body  = math.abs(close - open)
+            bool  disp  = body > 0.8 * atr                 // displacement şamı
+            int   score = math.min(5, math.max(1, pendStars - 1) + (disp ? 1 : 0) + (volSpike ? 1 : 0))
+            if score >= minScore
+                bool  bull  = pendDir == 1
+                Pool  tgtP  = bull ? nearest(highs, true) : nearest(lows, false)
+                float sl    = pendExt
+                float tp    = na(tgtP) ? (bull ? close + 2 * math.abs(close - sl) : close - 2 * math.abs(close - sl)) : tgtP.price
+                float rr    = math.abs(tp - close) / math.max(syminfo.mintick, math.abs(close - sl))
+                color c     = bull ? cBull : cBear
+                string txt  = (bull ? "▲ BUY" : "▼ SELL") + "  " + starStr(score) + "\n" + pendTag + " sweep + MSS"
+                label.new(bar_index, bull ? low : high, txt, style = bull ? label.style_label_up : label.style_label_down, color = c, textcolor = color.white, size = size.small, tooltip = "Entry: " + str.tostring(close, format.mintick) + "\nSL: " + str.tostring(sl, format.mintick) + "\nTP: " + str.tostring(tp, format.mintick) + (na(tgtP) ? " (2R)" : " (" + tagOf(tgtP) + ")") + "\nRR: " + str.tostring(rr, "#.##") + "\nDisplacement: " + (disp ? "✔" : "✘") + "  Volume: " + (volSpike ? "✔" : "✘"))
+                if showTrade
+                    line.new(bar_index, close, bar_index + tradeBars, close, color = color.new(color.gray, 0), width = 1)
+                    line.new(bar_index, sl, bar_index + tradeBars, sl, color = cBear, style = line.style_dashed)
+                    line.new(bar_index, tp, bar_index + tradeBars, tp, color = cBull, style = line.style_dashed)
+                    box.new(bar_index, math.max(close, sl), bar_index + tradeBars, math.min(close, sl), border_color = color.new(cBear, 100), bgcolor = color.new(cBear, 90))
+                    box.new(bar_index, math.max(close, tp), bar_index + tradeBars, math.min(close, tp), border_color = color.new(cBull, 100), bgcolor = color.new(cBull, 90))
+                    label.new(bar_index + tradeBars, tp, "TP " + str.tostring(tp, format.mintick) + "  RR " + str.tostring(rr, "#.#"), style = label.style_none, textcolor = cBull, size = size.small, textalign = text.align_left)
+                bullSig := bull
+                bearSig := not bull
+                lastSig := (bull ? "▲ BUY " : "▼ SELL ") + str.tostring(close, format.mintick) + "  " + starStr(score)
+            pendDir := 0
 
 // ═════════════════════════════ DASHBOARD ═════════════════════════════
 pos = tblPos == "Top Right" ? position.top_right : tblPos == "Bottom Right" ? position.bottom_right : tblPos == "Top Left" ? position.top_left : position.bottom_left
-var table tbl = table.new(pos, 4, 4, bgcolor = color.new(#131722, 10), border_width = 1, border_color = color.new(#363a45, 0))
+var table tbl = table.new(pos, 4, 6, bgcolor = color.new(#131722, 5), border_width = 1, border_color = color.new(#363a45, 0))
+rowF(int r, string name, Pool p, color c) =>
+    table.cell(tbl, 0, r, name, text_color = c, text_size = size.small, text_halign = text.align_left)
+    table.cell(tbl, 1, r, na(p) ? "—" : tagOf(p) + " " + str.tostring(p.price, format.mintick), text_color = color.white, text_size = size.small)
+    table.cell(tbl, 2, r, na(p) ? "—" : str.tostring(math.abs(p.price - close), format.mintick), text_color = color.white, text_size = size.small)
+    table.cell(tbl, 3, r, na(p) ? "—" : starStr(stars(p)), text_color = color.yellow, text_size = size.small)
+
 if showTbl and barstate.islast
-    Pool nb = na
-    Pool ns = na
-    for p in highs
-        if not p.swept and p.price > close and (na(nb) or p.price < nb.price)
-            nb := p
-    for p in lows
-        if not p.swept and p.price < close and (na(ns) or p.price > ns.price)
-            ns := p
-    float totB = 0.0
-    float totS = 0.0
-    for p in highs
-        totB += p.swept ? 0 : p.vol
-    for p in lows
-        totS += p.swept ? 0 : p.vol
     tc = color.white
-    table.cell(tbl, 0, 0, "Side", text_color = tc, text_size = size.small)
-    table.cell(tbl, 1, 0, "Level", text_color = tc, text_size = size.small)
-    table.cell(tbl, 2, 0, "Dist", text_color = tc, text_size = size.small)
-    table.cell(tbl, 3, 0, "Vol", text_color = tc, text_size = size.small)
-    table.cell(tbl, 0, 1, "BSL ▲", text_color = cBsl, text_size = size.small)
-    table.cell(tbl, 1, 1, na(nb) ? "—" : str.tostring(nb.price, format.mintick), text_color = tc, text_size = size.small)
-    table.cell(tbl, 2, 1, na(nb) ? "—" : str.tostring(nb.price - close, format.mintick), text_color = tc, text_size = size.small)
-    table.cell(tbl, 3, 1, na(nb) ? "—" : fmtVol(nb.vol), text_color = tc, text_size = size.small)
-    table.cell(tbl, 0, 2, "SSL ▼", text_color = cSsl, text_size = size.small)
-    table.cell(tbl, 1, 2, na(ns) ? "—" : str.tostring(ns.price, format.mintick), text_color = tc, text_size = size.small)
-    table.cell(tbl, 2, 2, na(ns) ? "—" : str.tostring(close - ns.price, format.mintick), text_color = tc, text_size = size.small)
-    table.cell(tbl, 3, 2, na(ns) ? "—" : fmtVol(ns.vol), text_color = tc, text_size = size.small)
-    float tot = totB + totS
-    string bias = tot == 0 ? "—" : totB > totS ? "Draw ▲ BSL " + str.tostring(100 * totB / tot, "#") + "%" : "Draw ▼ SSL " + str.tostring(100 * totS / tot, "#") + "%"
-    table.cell(tbl, 0, 3, bias, text_color = totB > totS ? cBsl : cSsl, text_size = size.small)
-    table.merge_cells(tbl, 0, 3, 3, 3)
+    ts = size.small
+    Pool nb = nearest(highs, true)
+    Pool ns = nearest(lows, false)
+    // ən güclü (magnit) hədəf hər tərəfdə
+    Pool sb = na
+    Pool ss = na
+    for p in highs
+        if not p.swept and p.price > close and (na(sb) or stars(p) > stars(sb) or stars(p) == stars(sb) and p.price < sb.price)
+            sb := p
+    for p in lows
+        if not p.swept and p.price < close and (na(ss) or stars(p) > stars(ss) or stars(p) == stars(ss) and p.price > ss.price)
+            ss := p
+    table.cell(tbl, 0, 0, "", text_color = tc, text_size = ts)
+    table.cell(tbl, 1, 0, "Level", text_color = tc, text_size = ts)
+    table.cell(tbl, 2, 0, "Dist", text_color = tc, text_size = ts)
+    table.cell(tbl, 3, 0, "Strength", text_color = tc, text_size = ts)
+    rowF(1, "Next BSL ▲", nb, cBsl)
+    rowF(2, "Major BSL ▲", sb, cBsl)
+    rowF(3, "Next SSL ▼", ns, cSsl)
+    rowF(4, "Major SSL ▼", ss, cSsl)
+    string st = pendDir == -1 ? "BSL raided → SELL MSS gözlənilir" : pendDir == 1 ? "SSL raided → BUY MSS gözlənilir" : "Son siqnal: " + lastSig
+    table.cell(tbl, 0, 5, st, text_color = pendDir == -1 ? cBear : pendDir == 1 ? cBull : tc, text_size = ts)
+    table.merge_cells(tbl, 0, 5, 3, 5)
 
 // ═════════════════════════════ ALERTS ═════════════════════════════
-alertcondition(bslSwept, "BSL Swept", "Buy-side liquidity swept on {{ticker}} @ {{close}}")
-alertcondition(sslSwept, "SSL Swept", "Sell-side liquidity swept on {{ticker}} @ {{close}}")
-if bslSwept
-    alert("BSL swept " + syminfo.ticker + " @ " + str.tostring(hPx, format.mintick), alert.freq_once_per_bar)
-if sslSwept
-    alert("SSL swept " + syminfo.ticker + " @ " + str.tostring(lPx, format.mintick), alert.freq_once_per_bar)
+alertcondition(raidBsl, "BSL Raid", "{{ticker}}: buy-side liquidity raided — bearish reversal watch")
+alertcondition(raidSsl, "SSL Raid", "{{ticker}}: sell-side liquidity raided — bullish reversal watch")
+alertcondition(bullSig, "Bullish Reversal", "{{ticker}}: SSL sweep + MSS → BUY @ {{close}}")
+alertcondition(bearSig, "Bearish Reversal", "{{ticker}}: BSL sweep + MSS → SELL @ {{close}}")
+if bullSig or bearSig
+    alert(syminfo.ticker + " " + lastSig, alert.freq_once_per_bar_close)
