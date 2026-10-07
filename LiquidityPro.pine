@@ -342,7 +342,7 @@ heatGrid(float t) =>
 var float gStep = na
 rngAvg = ta.sma(high - low, 200)
 if na(gStep)
-    gStep := gridStep > 0 ? gridStep : bar_index >= 200 ? math.max(syminfo.mintick, math.round_to_mintick(rngAvg * 1.5)) : na
+    gStep := gridStep > 0 ? gridStep : bar_index >= 200 ? math.max(syminfo.mintick, math.round_to_mintick(rngAvg * 2.0)) : na
 
 // Ticarət olunmuş həcm xəritəsi — tənbəl eksponensial sönmə (key = qiymət sətri)
 var map<int, float> vMap = map.new<int, float>()
@@ -358,7 +358,7 @@ if not na(gStep) and volume > 0
         vMap.put(k, readVol(k) + part)
         vBar.put(k, bar_index)
 
-ROWS = 24
+ROWS = 18
 array<float> rowPx  = array.new<float>(ROWS + 1, na)
 array<color> rowCol = array.new<color>(ROWS, na)
 float magTarget = na
@@ -408,12 +408,6 @@ gp15 = plot(rowPx.get(15), "", display = display.none, editable = false)
 gp16 = plot(rowPx.get(16), "", display = display.none, editable = false)
 gp17 = plot(rowPx.get(17), "", display = display.none, editable = false)
 gp18 = plot(rowPx.get(18), "", display = display.none, editable = false)
-gp19 = plot(rowPx.get(19), "", display = display.none, editable = false)
-gp20 = plot(rowPx.get(20), "", display = display.none, editable = false)
-gp21 = plot(rowPx.get(21), "", display = display.none, editable = false)
-gp22 = plot(rowPx.get(22), "", display = display.none, editable = false)
-gp23 = plot(rowPx.get(23), "", display = display.none, editable = false)
-gp24 = plot(rowPx.get(24), "", display = display.none, editable = false)
 fill(gp0, gp1, color = rowCol.get(0), editable = false)
 fill(gp1, gp2, color = rowCol.get(1), editable = false)
 fill(gp2, gp3, color = rowCol.get(2), editable = false)
@@ -432,12 +426,6 @@ fill(gp14, gp15, color = rowCol.get(14), editable = false)
 fill(gp15, gp16, color = rowCol.get(15), editable = false)
 fill(gp16, gp17, color = rowCol.get(16), editable = false)
 fill(gp17, gp18, color = rowCol.get(17), editable = false)
-fill(gp18, gp19, color = rowCol.get(18), editable = false)
-fill(gp19, gp20, color = rowCol.get(19), editable = false)
-fill(gp20, gp21, color = rowCol.get(20), editable = false)
-fill(gp21, gp22, color = rowCol.get(21), editable = false)
-fill(gp22, gp23, color = rowCol.get(22), editable = false)
-fill(gp23, gp24, color = rowCol.get(23), editable = false)
 plot(showMag ? mag : na, "Magnet", color = cMag, linewidth = 2)
 
 // Həcm köpükləri (alış yaşıl / satış çəhrayı, ölçü = həcm/orta)
