@@ -27,12 +27,20 @@ cSwept    = input.color(color.new(#787b86, 0), "Swept", group = grpS)
 lineW     = input.int(1, "Line Width", minval = 1, maxval = 4, group = grpS)
 
 grpH = "Heatmap"
-showHeat  = input.bool(true, "Show Heatmap", group = grpH)
-heatSrc   = input.string("Pools + Volume", "Heatmap Source", options = ["Pools", "Volume", "Pools + Volume"], group = grpH)
-bins      = input.int(50, "Number of Heatmap Bins", minval = 5, maxval = 150, group = grpH)
-heatW     = input.int(40, "Heatmap Max Width (bars)", minval = 5, group = grpH)
-heatOff   = input.int(8, "Heatmap Offset (bars)", minval = 0, group = grpH)
-cHeat     = input.color(#ff9800, "Heat Color", group = grpH)
+showBands = input.bool(true, "Liquidity Heat Bands (time-based)", group = grpH, tooltip = "Hər pool üçün zamanla uzanan istilik zolağı — rəng həcmin intensivliyinə görə")
+bandAtr   = input.float(0.25, "Band Thickness (ATR)", minval = 0.02, step = 0.05, group = grpH)
+showSweptBand = input.bool(true, "Show Swept Bands (faded)", group = grpH)
+showHeat  = input.bool(true, "Volume Profile Heatmap (right)", group = grpH)
+heatSrc   = input.string("Pools + Volume", "Profile Source", options = ["Pools", "Volume", "Pools + Volume"], group = grpH)
+bins      = input.int(60, "Number of Bins", minval = 10, maxval = 150, group = grpH)
+heatW     = input.int(50, "Profile Max Width (bars)", minval = 5, group = grpH)
+heatOff   = input.int(10, "Profile Offset (bars)", minval = 0, group = grpH)
+splitSide = input.bool(true, "Split Buy / Sell Volume", group = grpH)
+showPoc   = input.bool(true, "Show POC + Value Area (70%)", group = grpH)
+vaPct     = input.float(70, "Value Area %", minval = 10, maxval = 95, group = grpH)
+palette   = input.string("Thermal", "Palette", options = ["Thermal", "Mono"], group = grpH)
+cHeat     = input.color(#ff9800, "Mono Color", group = grpH)
+cPoc      = input.color(#ffeb3b, "POC Color", group = grpH)
 
 grpT = "Dashboard"
 showTbl   = input.bool(true, "Show Nearest Liquidity Table", group = grpT)
@@ -58,6 +66,12 @@ fmtVol(float v) =>
 
 bubSize(float r) =>
     r < 1.0 ? size.small : r < 1.6 ? size.normal : r < 2.5 ? size.large : size.huge
+
+heatColor(float x, int transp) =>
+    // x: 0..1 intensivlik → soyuq (göy) → isti (qırmızı/sarı)
+    float t = math.max(0.0, math.min(1.0, x))
+    color c = palette == "Mono" ? cHeat : t < 0.33 ? color.from_gradient(t, 0, 0.33, #0d47a1, #00bcd4) : t < 0.66 ? color.from_gradient(t, 0.33, 0.66, #00bcd4, #ffeb3b) : color.from_gradient(t, 0.66, 1.0, #ffeb3b, #ff1744)
+    color.new(c, palette == "Mono" ? math.round(transp + (100 - transp) * (1 - t) * 0.8) : transp)
 
 tagOf(Pool p) =>
     (p.isHigh ? (p.touches > 1 ? "EQH" : "BSL") : (p.touches > 1 ? "EQL" : "SSL")) + (p.touches > 1 ? " ×" + str.tostring(p.touches) : "")
@@ -180,48 +194,128 @@ bslSwept := hHit
 sslSwept := lHit
 
 // ═════════════════════════════ HEATMAP ═════════════════════════════
-var array<box> heat = array.new<box>()
-if showHeat and barstate.islast
+var array<box>  heat  = array.new<box>()
+var array<line> hLine = array.new<line>()
+var array<label> hLbl = array.new<label>()
+if barstate.islast and (showHeat or showBands)
     for b in heat
         box.delete(b)
+    for l in hLine
+        line.delete(l)
+    for l in hLbl
+        label.delete(l)
     heat.clear()
-    float top = useWin ? close + winPts : na
-    float bot = useWin ? close - winPts : na
-    if not useWin
-        top := high
-        bot := low
+    hLine.clear()
+    hLbl.clear()
+
+    // ── 1) Zaman əsaslı likvidlik zolaqları (Coinglass tipli) ──
+    if showBands
+        float mxV = 0.0
         for p in highs
-            top := math.max(top, p.price)
+            mxV := math.max(mxV, p.vol)
         for p in lows
-            bot := math.min(bot, p.price)
-    float step = (top - bot) / bins
-    if step > 0
-        array<float> w = array.new<float>(bins, 0.0)
-        if heatSrc != "Volume"
+            mxV := math.max(mxV, p.vol)
+        float hh = bandAtr * atr / 2
+        if mxV > 0
+            for side = 0 to 1
+                array<Pool> arr = side == 0 ? highs : lows
+                for p in arr
+                    bool inWin = not useWin or math.abs(p.price - close) <= winPts
+                    if inWin and (not p.swept or showSweptBand)
+                        float x = math.sqrt(p.vol / mxV)            // sqrt: zəif pool-lar da görünsün
+                        int   tr = p.swept ? 85 : 35
+                        int   x2 = p.swept ? p.sweptAt : bar_index + heatOff - 1
+                        heat.push(box.new(p.bar, p.price + hh, x2, p.price - hh, border_color = color.new(color.black, 100), bgcolor = heatColor(x, tr)))
+                        // nüvə — dəqiq səviyyə
+                        heat.push(box.new(p.bar, p.price + hh * 0.25, x2, p.price - hh * 0.25, border_color = color.new(color.black, 100), bgcolor = heatColor(x, math.max(0, tr - 25))))
+
+    // ── 2) Sağ tərəfdə dəqiq həcm profili ──
+    if showHeat
+        float top = close + winPts
+        float bot = close - winPts
+        if not useWin
+            top := high
+            bot := low
             for p in highs
-                if not p.swept and p.price >= bot and p.price <= top
-                    int k = math.min(bins - 1, int((p.price - bot) / step))
-                    w.set(k, w.get(k) + p.vol)
+                top := math.max(top, p.price)
             for p in lows
-                if not p.swept and p.price >= bot and p.price <= top
-                    int k = math.min(bins - 1, int((p.price - bot) / step))
-                    w.set(k, w.get(k) + p.vol)
-        if heatSrc != "Pools"
-            int tfSec = timeframe.in_seconds()
-            int n = math.min(4999, math.max(1, int(lookbackH * 3600 / tfSec)), bar_index)
-            for j = 0 to n - 1
-                float hp = hlc3[j]
-                if hp >= bot and hp <= top
-                    int k = math.min(bins - 1, int((hp - bot) / step))
-                    w.set(k, w.get(k) + nz(volume[j]))
-        float mx = w.max()
-        if mx > 0
+                bot := math.min(bot, p.price)
+        float step = (top - bot) / bins
+        if step > 0
+            array<float> wB = array.new<float>(bins, 0.0)   // alış / BSL
+            array<float> wS = array.new<float>(bins, 0.0)   // satış / SSL
+            if heatSrc != "Volume"
+                for side = 0 to 1
+                    array<Pool> arr = side == 0 ? highs : lows
+                    for p in arr
+                        if not p.swept and p.price >= bot and p.price <= top
+                            int k = math.min(bins - 1, int((p.price - bot) / step))
+                            if side == 0
+                                wB.set(k, wB.get(k) + p.vol)
+                            else
+                                wS.set(k, wS.get(k) + p.vol)
+            if heatSrc != "Pools"
+                int n = math.min(4999, math.max(1, int(lookbackH * 3600 / timeframe.in_seconds())), bar_index)
+                for j = 0 to n - 1
+                    float h = high[j]
+                    float l = low[j]
+                    float v = nz(volume[j])
+                    if v > 0 and h >= bot and l <= top
+                        // həcm barın bütün diapazonuna mütənasib paylanır (yalnız hlc3 yox)
+                        float rng = math.max(h - l, syminfo.mintick)
+                        float upFrac = (close[j] - l) / rng          // alıcı payı (close-location)
+                        int k0 = math.max(0, int((math.max(l, bot) - bot) / step))
+                        int k1 = math.min(bins - 1, int((math.min(h, top) - bot) / step))
+                        for k = k0 to k1
+                            float bLo = bot + step * k
+                            float ov  = math.max(0.0, math.min(h, bLo + step) - math.max(l, bLo))
+                            float part = h == l ? v : v * ov / rng
+                            wB.set(k, wB.get(k) + part * upFrac)
+                            wS.set(k, wS.get(k) + part * (1 - upFrac))
+            array<float> tot = array.new<float>(bins, 0.0)
             for k = 0 to bins - 1
-                float v = w.get(k)
-                if v > 0
-                    int len = math.max(1, int(heatW * v / mx))
-                    color c = color.from_gradient(v, 0, mx, color.new(cHeat, 92), color.new(cHeat, 15))
-                    heat.push(box.new(bar_index + heatOff, bot + step * (k + 1), bar_index + heatOff + len, bot + step * k, border_color = color.new(cHeat, 100), bgcolor = c))
+                tot.set(k, wB.get(k) + wS.get(k))
+            float mx = tot.max()
+            if mx > 0
+                int x0 = bar_index + heatOff
+                for k = 0 to bins - 1
+                    float v = tot.get(k)
+                    if v > 0
+                        float yT = bot + step * (k + 1)
+                        float yB = bot + step * k
+                        int len = math.max(1, int(heatW * v / mx))
+                        if splitSide
+                            int lb = int(len * wB.get(k) / v)
+                            if lb > 0
+                                heat.push(box.new(x0, yT, x0 + lb, yB, border_color = color.new(color.black, 100), bgcolor = color.from_gradient(v, 0, mx, color.new(cBsl, 80), color.new(cBsl, 15))))
+                            if len - lb > 0
+                                heat.push(box.new(x0 + lb, yT, x0 + len, yB, border_color = color.new(color.black, 100), bgcolor = color.from_gradient(v, 0, mx, color.new(cSsl, 80), color.new(cSsl, 15))))
+                        else
+                            heat.push(box.new(x0, yT, x0 + len, yB, border_color = color.new(color.black, 100), bgcolor = heatColor(math.sqrt(v / mx), 15)))
+                if showPoc
+                    int poc = tot.indexof(mx)
+                    float total = tot.sum()
+                    float acc = mx
+                    int up = poc
+                    int dn = poc
+                    while acc < total * vaPct / 100 and (up < bins - 1 or dn > 0)
+                        float vu = up < bins - 1 ? tot.get(up + 1) : -1.0
+                        float vd = dn > 0 ? tot.get(dn - 1) : -1.0
+                        if vu >= vd
+                            up += 1
+                            acc += vu
+                        else
+                            dn -= 1
+                            acc += vd
+                    float pocPx = bot + step * (poc + 0.5)
+                    float vah = bot + step * (up + 1)
+                    float val = bot + step * dn
+                    hLine.push(line.new(x0 - heatOff, pocPx, x0 + heatW, pocPx, color = cPoc, width = 2))
+                    hLine.push(line.new(x0, vah, x0 + heatW, vah, color = color.new(cPoc, 40), style = line.style_dotted))
+                    hLine.push(line.new(x0, val, x0 + heatW, val, color = color.new(cPoc, 40), style = line.style_dotted))
+                    hLbl.push(label.new(x0 + heatW, pocPx, "POC " + str.tostring(pocPx, format.mintick), style = label.style_label_left, color = color.new(cPoc, 20), textcolor = color.black, size = size.small))
+                    hLbl.push(label.new(x0 + heatW, vah, "VAH " + str.tostring(vah, format.mintick), style = label.style_none, textcolor = cPoc, size = size.small, textalign = text.align_left))
+                    hLbl.push(label.new(x0 + heatW, val, "VAL " + str.tostring(val, format.mintick), style = label.style_none, textcolor = cPoc, size = size.small, textalign = text.align_left))
 
 // ═════════════════════════════ DASHBOARD ═════════════════════════════
 pos = tblPos == "Top Right" ? position.top_right : tblPos == "Bottom Right" ? position.bottom_right : tblPos == "Top Left" ? position.top_left : position.bottom_left
