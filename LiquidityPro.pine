@@ -48,13 +48,14 @@ gridStep  = input.float(0, "Row Height (points, 0 = auto)", minval = 0, group = 
 volTau    = input.int(150, "Volume Memory (bars)", minval = 5, group = grpG, tooltip = "Keçmiş həcmin nə qədər yavaş söndüyü")
 poolWgt   = input.float(1.0, "Pool Weight", minval = 0, step = 0.1, group = grpG)
 volWgt    = input.float(1.0, "Traded Volume Weight", minval = 0, step = 0.1, group = grpG)
-gamma     = input.float(0.7, "Contrast (gamma)", minval = 0.2, maxval = 3, step = 0.1, group = grpG)
-gridAlpha = input.int(25, "Heatmap Transparency", minval = 0, maxval = 95, group = grpG)
+gamma     = input.float(1.3, "Contrast (gamma)", minval = 0.2, maxval = 3, step = 0.1, group = grpG)
+gridAlpha = input.int(45, "Heatmap Transparency", minval = 0, maxval = 95, group = grpG)
 showMag   = input.bool(true, "Magnet Line (strongest level)", group = grpG)
+minShow   = input.float(0.35, "Hide Weak Zones Below", minval = 0, maxval = 0.9, step = 0.05, group = grpG, tooltip = "Zəif zonaları gizlədir — yalnız həqiqətən güclü likvidlik rənglənir")
 magSpeed  = input.float(0.15, "Magnet Speed", minval = 0.01, maxval = 1, step = 0.01, group = grpG)
 cMag      = input.color(#ffd600, "Magnet Color", group = grpG)
 showVB    = input.bool(true, "Volume Bubbles on Candles", group = grpG)
-vbThr     = input.float(1.3, "Bubble Min Volume (x avg)", minval = 0.5, step = 0.1, group = grpG)
+vbThr     = input.float(2.0, "Bubble Min Volume (x avg)", minval = 0.5, step = 0.1, group = grpG)
 cVBuy     = input.color(#2ee6b6, "Buy Bubble", group = grpG)
 cVSell    = input.color(#ff4d8d, "Sell Bubble", group = grpG)
 
@@ -336,8 +337,9 @@ if barstate.islast and (showHeat or showBands)
 // ═════════════════════════════ HEATMAP GRID ═════════════════════════════
 heatGrid(float t) =>
     float x = math.pow(math.max(0.0, math.min(1.0, t)), gamma)
-    color c = x < 0.25 ? color.from_gradient(x, 0, 0.25, #000000, #0b3d1e) : x < 0.5 ? color.from_gradient(x, 0.25, 0.5, #0b3d1e, #4caf50) : x < 0.75 ? color.from_gradient(x, 0.5, 0.75, #4caf50, #ffeb3b) : color.from_gradient(x, 0.75, 1.0, #ffeb3b, #ff1744)
-    color.new(c, x < 0.05 ? 100 : gridAlpha)
+    float y = (x - minShow) / (1 - minShow)          // zəif hissə tam şəffaf
+    color c = y < 0.5 ? color.from_gradient(y, 0, 0.5, #1b5e20, #ffd600) : color.from_gradient(y, 0.5, 1.0, #ffd600, #ff1744)
+    x < minShow ? na : color.new(c, math.round(gridAlpha + (100 - gridAlpha) * (1 - y) * 0.6))
 
 var float gStep = na
 rngAvg = ta.sma(high - low, 200)
@@ -362,8 +364,17 @@ ROWS = 18
 array<float> rowPx  = array.new<float>(ROWS + 1, na)
 array<color> rowCol = array.new<color>(ROWS, na)
 float magTarget = na
+var int   gBase = na
+var float mxRef = 0.0
+bool shifted = false
+if not na(gStep)
+    float lo = (nz(gBase) + 3) * gStep
+    float hi = (nz(gBase) + ROWS - 3) * gStep
+    if na(gBase) or close < lo or close > hi                 // şəbəkə yalnız qiymət kənara çıxanda sürüşür
+        gBase := int(math.floor(close / gStep)) - ROWS / 2
+        shifted := true
 if showGrid and not na(gStep)
-    int base = int(math.floor(close / gStep)) - ROWS / 2
+    int base = gBase
     array<float> d = array.new<float>(ROWS, 0.0)
     float avgPool = math.max(1.0, avgVol)
     for i = 0 to ROWS - 1
@@ -378,11 +389,13 @@ if showGrid and not na(gStep)
                         w += poolWgt * (p.vol / avgPool) * 10 * math.exp(-0.5 * z * z)
         d.set(i, w)
     float mx = d.max()
-    for i = 0 to ROWS
-        rowPx.set(i, (base + i) * gStep)
+    mxRef := math.max(mx, mxRef * 0.995)                   // sabit miqyas: sakit dövrlər sakit görünür
+    if not shifted
+        for i = 0 to ROWS
+            rowPx.set(i, (base + i) * gStep)
     if mx > 0
         for i = 0 to ROWS - 1
-            rowCol.set(i, heatGrid(d.get(i) / mx))
+            rowCol.set(i, heatGrid(d.get(i) / mxRef))
         magTarget := (base + d.indexof(mx) + 0.5) * gStep
 
 var float mag = na
